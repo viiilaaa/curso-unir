@@ -1,3 +1,19 @@
+def waitForPort(int port, int retries = 30, int delay = 1) {
+    for (int i = 0; i < retries; i++) {
+        def result = sh(
+            script: "nc -z localhost ${port}",
+            returnStatus: true
+        )
+        if (result == 0) {
+            echo "Port ${port} is UP!"
+            return
+        }
+        echo "Waiting for port ${port}..."
+        sleep delay
+    }
+    error "ERROR: Timeout waiting for port ${port}"
+}
+
 pipeline {
     agent any
 
@@ -45,13 +61,15 @@ pipeline {
                             whoami
                             export FLASK_APP=Caso_practico1_1/app/api.py                          
                             flask run &
-
-                            sleep 5
-
+                        '''
+                        waitForPort(5000)
+                        
+                        sh '''
                             java -jar /home/jenkins/agent2/wiremock/wiremock-standalone-3.13.2.jar --port 9090 --root-dir Caso_practico1_1/test/wiremock &
-                            
-                            sleep 10
-
+                        '''
+                        waitForPort(9090)
+                        
+                        sh '''
                             export PYTHONPATH=${WORKSPACE}/Caso_practico1_1
                             pytest --junitxml=result-rest.xml Caso_practico1_1/test/rest
                         '''
