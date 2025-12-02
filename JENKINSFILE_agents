@@ -1,0 +1,74 @@
+pipeline {
+    agent any
+
+    options { skipDefaultCheckout() }
+
+    stages {
+        stage('Inicial') {
+            steps {
+                echo 'Iniciando repositorio'
+                git 'https://github.com/viiilaaa/curso-unir'
+                bat 'dir'
+                bat 'hostname'
+                echo WORKSPACE
+                stash name:'codigo', includes:'**'
+            }
+        }
+        stage('build'){
+            steps {
+                bat 'echo "building..."'
+            }
+        }     
+        stage('Tests'){
+            parallel{
+                stage('Unit') {
+                    agent {label 'agent1'}
+                    steps {
+                        catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                            unstash name:'codigo'
+                            sh '''
+                                whoami
+                                ls -la
+                                export PYTHONPATH=${WORKSPACE}/Caso_practico1_1
+                                pytest --junitxml=result-unit.xml Caso_practico1_1/test/unit
+                            '''
+                            stash name:'unit-result', includes:'result-unit.xml'
+                       }
+                    }
+                }   
+                stage('Rest') {
+                    agent {label 'agent2'}
+                    steps {
+                      catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                        unstash name:'codigo'
+                        sh '''
+                            whoami
+                            export FLASK_APP=Caso_practico1_1/app/api.py                          
+                            flask run &
+
+                            sleep 5
+
+                            java -jar /home/jenkins/agent2/wiremock/wiremock-standalone-3.13.2.jar --port 9090 --root-dir Caso_practico1_1/test/wiremock &
+                            
+                            sleep 10
+
+                            export PYTHONPATH=${WORKSPACE}/Caso_practico1_1
+                            pytest --junitxml=result-rest.xml Caso_practico1_1/test/rest
+                        '''
+                      }
+                      stash name:'rest-result', includes:'result-rest.xml'
+                    }    
+                }                
+                
+            }
+                
+        }
+        stage('Results'){
+            steps {
+                unstash name:'unit-result'
+                unstash name:'rest-result'
+                junit 'result*.xml'
+            }
+        }
+    }
+}
