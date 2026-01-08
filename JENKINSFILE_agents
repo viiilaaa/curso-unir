@@ -20,73 +20,133 @@ pipeline {
     options { skipDefaultCheckout() }
 
     stages {
-        stage('Inicial') {
+        stage('Get code') {
             steps {
-                echo 'Iniciando repositorio'
+                echo 'Obtenemos el código fuente'
                 git 'https://github.com/viiilaaa/curso-unir'
                 bat 'dir'
+                bat 'whoami'
                 bat 'hostname'
                 echo WORKSPACE
                 stash name:'codigo', includes:'**'
             }
+            post { always { cleanWs() } }
         }
-        stage('build'){
-            steps {
-                bat 'echo "building..."'
-            }
-        }     
-        stage('Tests'){
+        stage('Parelilización') {
             parallel{
-                stage('Unit') {
-                    agent {label 'agent1'}
-                    steps {
-                        catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                            unstash name:'codigo'
-                            sh '''
-                                whoami
-                                ls -la
-                                export PYTHONPATH=${WORKSPACE}/Caso_practico1_1
-                                pytest --junitxml=result-unit.xml Caso_practico1_1/test/unit
-                            '''
-                            stash name:'unit-result', includes:'result-unit.xml'
-                       }
+                stage('Nodo Principal (Win)') {
+                    stages {
+                        stage('Security'){
+                            steps {
+                                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                                unstash name:'codigo'
+                                bat '''
+                                        whoami && hostname && echo %WORKSPACE%
+                                        bandit --exit-zero -r Caso_practico1_1 -f custom -o bandit.out --msg-template "{abspath}:{line}: [{test_id}] {severity}: {msg}“
+                                    '''
+                                    recordIssues qualityGates: [[threshold: 2, type: 'TOTAL', unstable: true], [threshold: 4, type: 'TOTAL', unstable: false]], tools: [pyLint(name: 'Bandit',pattern: 'bandit.out')]
+                                }
+                            }
+                            post { always { cleanWs() } }
+                        } 
                     }
-                }   
-                stage('Rest') {
+                }
+                stage('Agent1 linux'){
+                    agent {label 'agent1'}
+                    stages {
+                        stage('Cobertura') {
+                            steps {
+                                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                                    unstash name:'codigo'
+                                    sh '''
+                                        whoami && hostname && echo $WORKSPACE
+                                        export PYTHONPATH=${WORKSPACE}/Caso_practico1_1
+                                        python -m coverage run --branch --source=app --omit=Caso_practico1_1/app/_init_.py,Caso_practico1_1/app/api.py -m pytest --junitxml=result-unit.xml Caso_practico1_1/test/unit
+                                        python -m coverage xml
+                                    '''
+                                }
+                                stash name:'unit-result', includes:'result-unit.xml'
+                                recordCoverage qualityGates: [[criticality: 'NOTE', integerThreshold: 95, metric: 'LINE', threshold: 95.0], [criticality: 'ERROR', integerThreshold: 85, metric: 'LINE', threshold: 85.0], [criticality: 'NOTE', integerThreshold: 90, metric: 'BRANCH', threshold: 90.0], [criticality: 'ERROR', integerThreshold: 80, metric: 'BRANCH', threshold: 80.0]], tools: [[parser: 'COBERTURA', pattern: 'coverage.xml']]
+                            }
+                            post { always { cleanWs() } }
+                        }
+
+                        stage('Rendimiento') {
+                            steps {
+                                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                                    unstash name:'codigo'
+                                    sh '''
+                                        whoami && hostname && echo $WORKSPACE
+                                        export FLASK_APP=Caso_practico1_1/app/api.py                          
+                                        flask run &
+                                    '''
+                                    waitForPort(5000)
+
+                                    sh '''
+                                        ~/apache-jmeter-5.6.3/bin/jmeter -n -t Caso_practico1_1/test/jmeter/flask.jmx -f -l flask.jtl
+                                        '''
+                                }
+                                perfReport sourceDataFiles: 'flask.jtl'
+                            }
+                            post { always { cleanWs() } }  
+                        }  
+                    }
+                }
+                stage('Agent2 linux'){
                     agent {label 'agent2'}
-                    steps {
-                      catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                        unstash name:'codigo'
-                        sh '''
-                            whoami
-                            export FLASK_APP=Caso_practico1_1/app/api.py                          
-                            flask run &
-                        '''
-                        waitForPort(5000)
-                        
-                        sh '''
-                            java -jar /home/jenkins/agent2/wiremock/wiremock-standalone-3.13.2.jar --port 9090 --root-dir Caso_practico1_1/test/wiremock &
-                        '''
-                        waitForPort(9090)
-                        
-                        sh '''
-                            export PYTHONPATH=${WORKSPACE}/Caso_practico1_1
-                            pytest --junitxml=result-rest.xml Caso_practico1_1/test/rest
-                        '''
-                      }
-                      stash name:'rest-result', includes:'result-rest.xml'
-                    }    
-                }                
-                
+                    stages {
+                        stage('Rest') {
+                            steps {
+                              catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                                unstash name:'codigo'
+                                sh '''
+                                    whoami && hostname && echo $WORKSPACE
+                                    export FLASK_APP=Caso_practico1_1/app/api.py                          
+                                    flask run &
+                                '''
+                                waitForPort(5000)
+                                
+                                sh '''
+                                    java -jar ~/wiremock/wiremock-standalone-3.13.2.jar --port 9090 --root-dir Caso_practico1_1/test/wiremock &
+                                '''
+                                waitForPort(9090)
+                                
+                                sh '''
+                                    export PYTHONPATH=${WORKSPACE}/Caso_practico1_1
+                                    pytest --junitxml=result-rest.xml Caso_practico1_1/test/rest
+                                '''
+                              }
+                              junit 'result-rest.xml'
+                            }
+                            post { always { cleanWs() } }
+                        }          
+                        stage('Static') {
+                            steps {
+                                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                                    unstash name:'codigo'
+                                    sh '''
+                                        whoami && hostname && echo $WORKSPACE
+                                        python -m flake8 --exit-zero --format=pylint Caso_practico1_1/app >flake8.out
+                                        '''
+                                    recordIssues qualityGates: [[threshold: 8, type: 'TOTAL', unstable: true], [threshold: 10, type: 'TOTAL', unstable: false]], tools: [flake8(name: 'Flake8',pattern: 'flake8.out')]
+                                }
+                            }
+                            post { always { cleanWs() } }   
+                        }  
+                    }
+                }          
+
             }
                 
         }
-        stage('Results'){
+
+        stage('Unit'){
             steps {
                 unstash name:'unit-result'
-                unstash name:'rest-result'
-                junit 'result*.xml'
+                bat 'whoami && hostname && echo %WORKSPACE%'
+                junit 'result-unit.xml'
             }
-        }
+            post { always { cleanWs() } }
+        }             
     }
 }
