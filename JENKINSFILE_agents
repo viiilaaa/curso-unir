@@ -57,7 +57,7 @@ pipeline {
                                     sh '''
                                         whoami && hostname && echo $WORKSPACE
                                         export PYTHONPATH=${WORKSPACE}/Caso_practico1_1
-                                        python -m coverage run --branch --source=app --omit=Caso_practico1_1/app/_init_.py,Caso_practico1_1/app/api.py -m pytest --junitxml=result-unit.xml Caso_practico1_1/test/unit
+                                        python -m coverage run --branch --source=app --omit=Caso_practico1_1/app/__init__.py,Caso_practico1_1/app/api.py -m pytest --junitxml=result-unit.xml Caso_practico1_1/test/unit
                                         python -m coverage xml
                                     '''
                                 }
